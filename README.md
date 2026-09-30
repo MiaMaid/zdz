@@ -1,2 +1,21 @@
-# zdz
-zdz is ls like program
+Программа-аналог ls. ls like program
+-------------------------------------
+**Можешь сразу запустить: | Thou can just run:**
+
+```bash
+chmod +x zdz
+./zdz
+```
+__________________________________________________
+
+**Или скомпилируй ручками: | Or compile:**
+
+```bash
+nasm -f elf64 zdz.asm -o zdz.o
+ld -s -n -N --gc-sections zdz.o -o zdz
+```
+
+
+
+
+Программа только под X86_64/AMD-64 linux, ибо Ваша горничная не умеет писать под другие платформы
