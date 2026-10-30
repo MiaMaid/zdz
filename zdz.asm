@@ -1,623 +1,474 @@
 default rel
+%define PREFAULT 1
 
-section .data
-    dot_str         db ".", 0
-    align 8
-    color_dir       db 27, "[1;34m", 0
-    color_lnk       db 27, "[1;36m", 0
-    color_fifo      db 27, "[33m", 0, 0, 0
-    color_sock      db 27, "[1;35m", 0
-    color_blk       db 27, "[1;33m", 0
-    color_chr       db 27, "[1;33m", 0
-    color_exec      db 27, "[1;32m", 0
-    color_script    db 27, "[32m", 0, 0, 0
-    color_image     db 27, "[1;35m", 0
-    color_video     db 27, "[1;31m", 0
-    color_audio     db 27, "[1;36m", 0
-    color_archive   db 27, "[31m", 0, 0, 0
-    color_reg       db 27, "[0m", 0
+section .date
+   align 8
+   dot_str:        db ".", 0
+   align 8
+   color_dir:      db 27, "[1;34m", 0
+   color_lnk:      db 27, "[1;36m", 0
+   color_fifo:     db 27, "[33m", 0, 0, 0
+   color_sock:     db 27, "[1;35m", 0
+   color_blk:      db 27, "[1;33m", 0
+   color_chr:      db 27, "[1;33m", 0
+   color_exec:     db 27, "[1;32m", 0
+   color_script:   db 27, "[32m", 0, 0, 0
+   color_image:    db 27, "[1;35m", 0
+   color_video:    db 27, "[1;31m", 0
+   color_audio:    db 27, "[1;36m", 0
+   color_archive:  db 27, "[31m", 0, 0, 0
+   color_reg:      db 27, "[0m", 0, 0, 0, 0
 
 section .bss
-    align 16
-    dir_buf         resb 8192
-    str_pool        resb 65536
-    ptrs            resq 1024
-    out_buf         resb 262144
-    num_files       resq 1
-    pool_offset     resq 1
-    max_len         resq 1
-    col_width       resq 1
-    cols            resq 1
-    cur_col         resq 1
-    winsize         resw 4
+    alignb 4096
+ptrs:       resq 1024
+outbuf:     resb 4096 - 512
+out_limit:  resb 512
+    alignb 4096
+dir_buf:    resb 131072
+dir_end:    resb 64
 
 section .text
-    global _start
+global _start
 
 _start:
-    mov rax, 2
-    lea rdi, [rel dot_str]
-    xor rsi, rsi
-    xor rdx, rdx
+%if PREFAULT
+    mov     eax, 28
+    lea     rdi, [rel ptrs]
+    mov     esi, 8192 + 4096
+    mov     edx, 23
     syscall
+%endif
 
-    cmp rax, 0
-    jl .exit
-    mov r14, rax
+    mov     eax, 2
+    lea     rdi, [rel dot_str]
+    xor     esi, esi
+    xor     edx, edx
+    syscall
+    test    rax, rax
+    js      .exit
+    mov     r14, rax
+
+    lea     r8, [rel ptrs]
+    lea     rbx, [rel dir_buf]
+    xor     r12d, r12d
+    xor     r13d, r13d
 
 .read_dir:
-    mov rax, 217
-    mov rdi, r14
-    lea rsi, [rel dir_buf]
-    mov rdx, 8192
+    lea     rdx, [rel dir_end]
+    sub     rdx, rbx
+    cmp     rdx, 1024
+    jb      .read_done
+    mov     eax, 217
+    mov     rdi, r14
+    mov     rsi, rbx
     syscall
+    test    rax, rax
+    jle     .read_done
+    mov     rbp, rbx
+    add     rbx, rax
+    mov     r15, rbx
 
-    cmp rax, 0
-    jle .sort_files
+.parse:
+    lea     rsi, [rbp + 19]
+    cmp     byte [rsi], '.'
+    je      .next_dirent
+    cmp     r12, 1024
+    jge     .next_dirent
 
-    lea rdx, [rel dir_buf]
-    add rdx, rax
-    lea rbx, [rel dir_buf]
-
-.parse_dirent:
-    movzx r12, word [rbx + 16]
-    lea r13, [rbx + 19]
-
-    cmp byte [r13], '.'
-    je .next_dirent
-
-    mov r10, [rel num_files]
-    cmp r10, 1024
-    jge .next_dirent
-    mov r15, [rel pool_offset]
-    lea rdi, [rel str_pool]
-    add rdi, r15
-    mov al, byte [rbx + 18]
-    mov [rdi], al
-    inc rdi
-    lea r8, [rel ptrs]
-    mov [r8 + r10 * 8], rdi
-
-    mov rsi, r13
-    xor r9, r9
-.copy_str:
-    mov al, [rsi]
-    mov [rdi], al
-    inc rsi
-    inc rdi
-    test al, al
-    jz .copy_done
-    inc r9
-    jmp .copy_str
-
-.copy_done:
-    mov rcx, r9
-    cmp rcx, 24
-    jle .skip_cap
-    mov rcx, 24
-.skip_cap:
-    cmp rcx, [rel max_len]
-    jle .skip_max
-    mov [rel max_len], rcx
-.skip_max:
-
-    lea rax, [rel str_pool]
-    sub rdi, rax
-    mov [rel pool_offset], rdi
-    inc qword [rel num_files]
+    call    str_width
+    mov     ecx, eax
+    cmp     ecx, 24
+    jle     .cap_ok
+    mov     ecx, 24
+.cap_ok:
+    cmp     rcx, r13
+    jle     .max_ok
+    mov     r13, rcx
+.max_ok:
+    shl     rax, 32
+    lea     rdx, [rbp + 19]
+    or      rax, rdx
+    mov     [r8 + r12*8], rax
+    inc     r12
 
 .next_dirent:
-    add rbx, r12
-    cmp rbx, rdx
-    jl .parse_dirent
+    movzx   eax, word [rbp + 16]
+    add     rbp, rax
+    cmp     rbp, r15
+    jb      .parse
+    jmp     .read_dir
 
-    jmp .read_dir
-
-.sort_files:
-    mov rax, 3
-    mov rdi, r14
+.read_done:
+    mov     eax, 3
+    mov     rdi, r14
     syscall
 
-    mov rcx, [rel num_files]
-    cmp rcx, 2
-    jl .calc_layout
+    cmp     r12, 2
+    jl      .layout
+    xor     edi, edi
+    lea     rsi, [r12 - 1]
+    call    quicksort
 
-    xor rdi, rdi
-    mov rsi, rcx
-    dec rsi
-    call quicksort
-
-.calc_layout:
-    mov rax, 16
-    mov rdi, 1
-    mov rsi, 0x5413
-    lea rdx, [rel winsize]
+.layout:
+    push    0
+    mov     eax, 16
+    mov     edi, 1
+    mov     esi, 0x5413
+    mov     rdx, rsp
     syscall
-
-    mov r10, 80
-    cmp rax, 0
-    jl .width_ok
-    movzx rax, word [rel winsize + 2]
-    test rax, rax
-    jz .width_ok
-    mov r10, rax
-
+    mov     r10d, 80
+    test    rax, rax
+    js      .width_ok
+    movzx   eax, word [rsp + 2]
+    test    eax, eax
+    jz      .width_ok
+    mov     r10d, eax
 .width_ok:
-    mov rax, [rel max_len]
-    add rax, 2
-    mov [rel col_width], rax
-
-    xor rdx, rdx
-    mov rax, r10
-    div qword [rel col_width]
-    test rax, rax
-    jnz .cols_ok
-    mov rax, 1
+    pop     rax
+    lea     rcx, [r13 + 2]
+    mov     rax, r10
+    xor     edx, edx
+    div     rcx
+    test    rax, rax
+    jnz     .cols_ok
+    mov     eax, 1
 .cols_ok:
-    mov [rel cols], rax
-    mov qword [rel cur_col], 0
-
-.print_files:
-    lea rdi, [rel out_buf]
-    xor r12, r12
-    lea r8, [rel ptrs]
+    mov     r9, rax
+    mov     r10, rcx
+    lea     rdi, [rel outbuf]
+    xor     ebp, ebp
+    xor     ebx, ebx
 
 .print_loop:
-    cmp r12, [rel num_files]
-    jge .flush_out
+    cmp     rbp, r12
+    jge     .flush_out
+    lea     rax, [rel out_limit]
+    cmp     rdi, rax
+    jb      .room
+    call    flush
+.room:
+    mov     rax, [r8 + rbp*8]
+    mov     r15, rax
+    shr     r15, 32
+    mov     r13d, eax
+    movzx   eax, byte [r13 - 1]
 
-    mov r13, [r8 + r12 * 8]
-    movzx rbx, byte [r13 - 1]
-
-    cmp bl, 4
-    je .is_dir
-    cmp bl, 10
-    je .is_lnk
-    cmp bl, 1
-    je .is_fifo
-    cmp bl, 12
-    je .is_sock
-    cmp bl, 6
-    je .is_blk
-    cmp bl, 2
-    je .is_chr
-    cmp bl, 8
-    je .is_reg
-    jmp .reg_default
-
-.is_dir:
-    mov rax, [rel color_dir]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_lnk:
-    mov rax, [rel color_lnk]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_fifo:
-    mov rax, [rel color_fifo]
-    mov [rdi], rax
-    add rdi, 5
-    jmp .copy_filename_prep
-
-.is_sock:
-    mov rax, [rel color_sock]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_blk:
-    mov rax, [rel color_blk]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_chr:
-    mov rax, [rel color_chr]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_reg:
-    push r13
-    mov rsi, r13
-    xor rdx, rdx
-.find_dot:
-    mov al, [rsi]
-    test al, al
-    jz .found_dot_done
-    cmp al, '.'
-    jne .not_dot
-    mov rdx, rsi
-.not_dot:
-    inc rsi
-    jmp .find_dot
-.found_dot_done:
-    pop r13
-    test rdx, rdx
-    jz .reg_default
+    cmp     al, 8
+    je      .is_reg
+    cmp     al, 4
+    je      .is_dir
+    cmp     al, 10
+    je      .is_lnk
+    cmp     al, 1
+    je      .is_fifo
+    cmp     al, 12
+    je      .is_sock
+    cmp     al, 6
+    je      .is_blk
+    cmp     al, 2
+    je      .is_chr
+    jmp     .reg_default
 
 ; MAID PLACE
-    cmp byte [rdx + 1], 's'
-    jne .chk_py
-    cmp byte [rdx + 2], 'h'
-    jne .chk_py
-    cmp byte [rdx + 3], 0
-    je .is_script
+.is_dir:
+    mov     rax, [rel color_dir]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_lnk:
+    mov     rax, [rel color_lnk]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_fifo:
+    mov     rax, [rel color_fifo]
+    mov     [rdi], rax
+    add     rdi, 5
+    jmp     .copy_filename
+.is_sock:
+    mov     rax, [rel color_sock]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_blk:
+    mov     rax, [rel color_blk]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_chr:
+    mov     rax, [rel color_chr]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
 
-.chk_py:
-    cmp byte [rdx + 1], 'p'
-    jne .chk_exe
-    cmp byte [rdx + 2], 'y'
-    jne .chk_exe
-    cmp byte [rdx + 3], 0
-    je .is_script
+.is_reg:
+    mov     rsi, r13
+    xor     edx, edx
+.find_dot:
+    mov     al, [rsi]
+    test    al, al
+    jz      .dot_done
+    cmp     al, '.'
+    jne     .not_dot
+    mov     rdx, rsi
+.not_dot:
+    inc     rsi
+    jmp     .find_dot
+.dot_done:
+    test    rdx, rdx
+    jz      .reg_default
 
-.chk_exe:
-    cmp byte [rdx + 1], 'e'
-    jne .chk_bin
-    cmp byte [rdx + 2], 'x'
-    jne .chk_bin
-    cmp byte [rdx + 3], 'e'
-    jne .chk_bin
-    cmp byte [rdx + 4], 0
-    je .is_exec
+    mov     eax, [rdx + 1]
+    mov     ecx, eax
+    and     ecx, 0x00FFFFFF
 
-.chk_bin:
-    cmp byte [rdx + 1], 'b'
-    jne .chk_img
-    cmp byte [rdx + 2], 'i'
-    jne .chk_img
-    cmp byte [rdx + 3], 'n'
-    jne .chk_img
-    cmp byte [rdx + 4], 0
-    je .is_exec
-
-.chk_img:
-    cmp byte [rdx + 1], 'p'
-    jne .chk_jpg
-    cmp byte [rdx + 2], 'n'
-    jne .chk_jpg
-    cmp byte [rdx + 3], 'g'
-    jne .chk_jpg
-    cmp byte [rdx + 4], 0
-    je .is_image
-
-.chk_jpg:
-    cmp byte [rdx + 1], 'j'
-    jne .chk_gif
-    cmp byte [rdx + 2], 'p'
-    jne .chk_gif
-    cmp byte [rdx + 3], 'g'
-    jne .chk_gif
-    cmp byte [rdx + 4], 0
-    je .is_image
-
-.chk_gif:
-    cmp byte [rdx + 1], 'g'
-    jne .chk_svg
-    cmp byte [rdx + 2], 'i'
-    jne .chk_svg
-    cmp byte [rdx + 3], 'f'
-    jne .chk_svg
-    cmp byte [rdx + 4], 0
-    je .is_image
-
-.chk_svg:
-    cmp byte [rdx + 1], 's'
-    jne .chk_vid
-    cmp byte [rdx + 2], 'v'
-    jne .chk_vid
-    cmp byte [rdx + 3], 'g'
-    jne .chk_vid
-    cmp byte [rdx + 4], 0
-    je .is_image
-
-.chk_vid:
-    cmp byte [rdx + 1], 'm'
-    jne .chk_avi
-    cmp byte [rdx + 2], 'p'
-    jne .chk_mkv
-    cmp byte [rdx + 3], '4'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_video
-
-.chk_mkv:
-    cmp byte [rdx + 2], 'k'
-    jne .reg_default
-    cmp byte [rdx + 3], 'v'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_video
-
-.chk_avi:
-    cmp byte [rdx + 1], 'a'
-    jne .chk_aud
-    cmp byte [rdx + 2], 'v'
-    jne .chk_aud
-    cmp byte [rdx + 3], 'i'
-    jne .chk_aud
-    cmp byte [rdx + 4], 0
-    je .is_video
-
-.chk_aud:
-    cmp byte [rdx + 1], 'm'
-    jne .chk_wav
-    cmp byte [rdx + 2], 'p'
-    jne .chk_wav
-    cmp byte [rdx + 3], '3'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_audio
-
-.chk_wav:
-    cmp byte [rdx + 1], 'w'
-    jne .chk_flac
-    cmp byte [rdx + 2], 'a'
-    jne .chk_flac
-    cmp byte [rdx + 3], 'v'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_audio
-
-.chk_flac:
-    cmp byte [rdx + 1], 'f'
-    jne .chk_arc
-    cmp byte [rdx + 2], 'l'
-    jne .chk_arc
-    cmp byte [rdx + 3], 'a'
-    jne .chk_arc
-    cmp byte [rdx + 4], 'c'
-    jne .reg_default
-    cmp byte [rdx + 5], 0
-    je .is_audio
-
-.chk_arc:
-    cmp byte [rdx + 1], 'z'
-    jne .chk_tar
-    cmp byte [rdx + 2], 'i'
-    jne .chk_tar
-    cmp byte [rdx + 3], 'p'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_archive
-
-.chk_tar:
-    cmp byte [rdx + 1], 't'
-    jne .chk_gz
-    cmp byte [rdx + 2], 'a'
-    jne .chk_gz
-    cmp byte [rdx + 3], 'r'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_archive
-
-.chk_gz:
-    cmp byte [rdx + 1], 'g'
-    jne .chk_rar
-    cmp byte [rdx + 2], 'z'
-    jne .chk_rar
-    cmp byte [rdx + 3], 0
-    je .is_archive
-
-.chk_rar:
-    cmp byte [rdx + 1], 'r'
-    jne .reg_default
-    cmp byte [rdx + 2], 'a'
-    jne .reg_default
-    cmp byte [rdx + 3], 'r'
-    jne .reg_default
-    cmp byte [rdx + 4], 0
-    je .is_archive
-
-.reg_default:
-    mov rax, [rel color_reg]
-    mov [rdi], rax
-    add rdi, 4
-    jmp .copy_filename_prep
-
-.is_script:
-    mov rax, [rel color_script]
-    mov [rdi], rax
-    add rdi, 5
-    jmp .copy_filename_prep
-
-.is_exec:
-    mov rax, [rel color_exec]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_image:
-    mov rax, [rel color_image]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
-.is_video:
-    mov rax, [rel color_video]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
+    cmp     ecx, 'sh'
+    je      .is_script
+    cmp     ecx, 'py'
+    je      .is_script
+    cmp     ecx, 'gz'
+    je      .is_archive
+    cmp     eax, 'exe'
+    je      .is_exec
+    cmp     eax, 'bin'
+    je      .is_exec
+    cmp     eax, 'png'
+    je      .is_image
+    cmp     eax, 'jpg'
+    je      .is_image
+    cmp     eax, 'gif'
+    je      .is_image
+    cmp     eax, 'svg'
+    je      .is_image
+    cmp     eax, 'mp4'
+    je      .is_video
+    cmp     eax, 'mkv'
+    je      .is_video
+    cmp     eax, 'avi'
+    je      .is_video
+    cmp     eax, 'mp3'
+    je      .is_audio
+    cmp     eax, 'wav'
+    je      .is_audio
+    cmp     eax, 'zip'
+    je      .is_archive
+    cmp     eax, 'tar'
+    je      .is_archive
+    cmp     eax, 'rar'
+    je      .is_archive
+    cmp     eax, 'flac'
+    jne     .reg_default
+    cmp     byte [rdx + 5], 0
+    jne     .reg_default
 
 .is_audio:
-    mov rax, [rel color_audio]
-    mov [rdi], rax
-    add rdi, 7
-    jmp .copy_filename_prep
-
+    mov     rax, [rel color_audio]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.reg_default:
+    mov     rax, [rel color_reg]
+    mov     [rdi], rax
+    add     rdi, 4
+    jmp     .copy_filename
+.is_script:
+    mov     rax, [rel color_script]
+    mov     [rdi], rax
+    add     rdi, 5
+    jmp     .copy_filename
+.is_exec:
+    mov     rax, [rel color_exec]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_image:
+    mov     rax, [rel color_image]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
+.is_video:
+    mov     rax, [rel color_video]
+    mov     [rdi], rax
+    add     rdi, 7
+    jmp     .copy_filename
 .is_archive:
-    mov rax, [rel color_archive]
-    mov [rdi], rax
-    add rdi, 5
-    jmp .copy_filename_prep
-
-.copy_filename_prep:
-    xor r14, r14
+    mov     rax, [rel color_archive]
+    mov     [rdi], rax
+    add     rdi, 5
 
 .copy_filename:
-    mov al, [r13]
-    test al, al
-    jz .fn_done
+    xor     r14d, r14d
+.cf_loop:
+    movzx   eax, byte [r13]
+    test    al, al
+    jz      .fn_done
+    mov     ecx, 1
+    mov     r11d, 1
+    cmp     al, 0xC0
+    jb      .have
+    mov     ecx, 2
+    cmp     al, 0xE0
+    jb      .have
+    mov     ecx, 3
+    cmp     al, 0xE3
+    jb      .have
+    mov     r11d, 2
+    cmp     al, 0xEA
+    jb      .have
+    mov     r11d, 1
+    cmp     al, 0xF0
+    jb      .have
+    mov     ecx, 4
+    mov     r11d, 2
+.have:
+    cmp     r15, 24
+    jle     .copy_char
+    lea     rdx, [r14 + r11]
+    cmp     rdx, 22
+    jg      .truncate
+.copy_char:
+    mov     al, [r13]
+    test    al, al
+    jz      .fn_done
+    mov     [rdi], al
+    inc     r13
+    inc     rdi
+    dec     ecx
+    jnz     .copy_char
+    add     r14, r11
+    jmp     .cf_loop
 
-    cmp r14, 22
-    jl .normal_char
-    cmp byte [r13 + 1], 0
-    je .normal_char
-
-    mov byte [rdi], '.'
-    mov byte [rdi + 1], '.'
-    add rdi, 2
-    add r14, 2
-
-.drain_str:
-    inc r13
-    mov al, [r13]
-    test al, al
-    jnz .drain_str
-    jmp .fn_done
-
-.normal_char:
-    mov [rdi], al
-    inc r13
-    inc rdi
-    inc r14
-    jmp .copy_filename
+.truncate:
+    mov     word [rdi], '..'
+    add     rdi, 2
+    add     r14, 2
 
 .fn_done:
-    mov dword [rdi], 0x6d305b1b
-    add rdi, 4
+    mov     dword [rdi], 0x6d305b1b
+    add     rdi, 4
 
-    mov rcx, [rel col_width]
-    sub rcx, r14
-    jle .no_pad
+    mov     rcx, r10
+    sub     rcx, r14
+    jle     .no_pad
 .pad_loop:
-    mov byte [rdi], ' '
-    inc rdi
-    dec rcx
-    jnz .pad_loop
+    mov     byte [rdi], ' '
+    inc     rdi
+    dec     rcx
+    jnz     .pad_loop
 .no_pad:
 
-    inc qword [rel cur_col]
-    mov rax, [rel cur_col]
-    cmp rax, [rel cols]
-    jl .next_file
-
-    mov byte [rdi], 10
-    inc rdi
-    mov qword [rel cur_col], 0
-
+    inc     rbx
+    cmp     rbx, r9
+    jl      .next_file
+    mov     byte [rdi], 10
+    inc     rdi
+    xor     ebx, ebx
 .next_file:
-    inc r12
-    jmp .print_loop
+    inc     rbp
+    jmp     .print_loop
 
 .flush_out:
-    cmp qword [rel cur_col], 0
-    je .do_flush
-    mov byte [rdi], 10
-    inc rdi
-
+    test    rbx, rbx
+    jz      .do_flush
+    mov     byte [rdi], 10
+    inc     rdi
 .do_flush:
-    lea rdx, [rel out_buf]
-    sub rdi, rdx
-    jz .exit
-
-    mov rdx, rdi
-    mov rax, 1
-    mov rdi, 1
-    lea rsi, [rel out_buf]
-    syscall
-
+    call    flush
 .exit:
-    mov rax, 60
-    xor rdi, rdi
+    mov     eax, 60
+    xor     edi, edi
     syscall
+
+flush:
+    lea     rsi, [rel outbuf]
+    mov     rdx, rdi
+    sub     rdx, rsi
+    jz      .done
+    mov     eax, 1
+    mov     edi, 1
+    syscall
+    lea     rdi, [rel outbuf]
+.done:
+    ret
 
 quicksort:
-    cmp rdi, rsi
-    jge .qs_done
+.top:
+    cmp     rdi, rsi
+    jge     .ret
+    lea     rax, [rdi + rsi]
+    shr     rax, 1
+    mov     rcx, [r8 + rax*8]
+    mov     rdx, [r8 + rsi*8]
+    mov     [r8 + rax*8], rdx
+    mov     [r8 + rsi*8], rcx
+    mov     r11d, ecx
+    mov     r9, rdi
+    mov     r10, rdi
+.scan:
+    cmp     r10, rsi
+    jge     .scan_end
+    mov     rbx, [r8 + r10*8]
+    mov     edx, ebx
+    mov     ecx, r11d
+.cmp:
+    mov     al, [rdx]
+    mov     r14b, [rcx]
+    cmp     al, r14b
+    jne     .diff
+    test    al, al
+    jz      .keep
+    inc     rdx
+    inc     rcx
+    jmp     .cmp
+.diff:
+    ja      .keep
+    mov     rax, [r8 + r9*8]
+    mov     [r8 + r9*8], rbx
+    mov     [r8 + r10*8], rax
+    inc     r9
+.keep:
+    inc     r10
+    jmp     .scan
+.scan_end:
+    mov     rax, [r8 + r9*8]
+    mov     rbx, [r8 + rsi*8]
+    mov     [r8 + r9*8], rbx
+    mov     [r8 + rsi*8], rax
+    push    rsi
+    push    r9
+    lea     rsi, [r9 - 1]
+    call    quicksort
+    pop     rdi
+    inc     rdi
+    pop     rsi
+    jmp     .top
+.ret:
+    ret
 
-    push rbp
-    mov rbp, rsp
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-
-.qs_loop:
-    cmp rdi, rsi
-    jge .qs_pop_done
-    mov r12, rdi
-    mov r13, rsi
-
-    lea r8, [rel ptrs]
-    mov r14, [r8 + r13 * 8]
-    mov r15, r12
-    dec r15
-    mov rbx, r12
-
-.partition_loop:
-    cmp rbx, r13
-    jge .partition_end
-    mov rdi, [r8 + rbx * 8]
-    mov rsi, r14
-
-.inline_strcmp:
-    mov al, [rdi]
-    mov dl, [rsi]
-    cmp al, dl
-    jne .cmp_diff
-    test al, al
-    jz .no_swap
-    inc rdi
-    inc rsi
-    jmp .inline_strcmp
-
-.cmp_diff:
-    ja .no_swap
-    inc r15
-    mov rdi, [r8 + r15 * 8]
-    mov rsi, [r8 + rbx * 8]
-    mov [r8 + r15 * 8], rsi
-    mov [r8 + rbx * 8], rdi
-
-;Da, bez swapa XD
-.no_swap:
-    inc rbx
-    jmp .partition_loop
-
-.partition_end:
-    inc r15
-    mov rdi, [r8 + r15 * 8]
-    mov rsi, [r8 + r13 * 8]
-    mov [r8 + r15 * 8], rsi
-    mov [r8 + r13 * 8], rdi
-
-    mov rdi, r12
-    mov rsi, r15
-    dec rsi
-    push r15
-    push r13
-    call quicksort
-    pop r13
-    pop r15
-    mov rdi, r15
-    inc rdi
-    mov rsi, r13
-    jmp .qs_loop
-
-.qs_pop_done:
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
-
-.qs_done:
+str_width:
+    xor     eax, eax
+.l:
+    movzx   ecx, byte [rsi]
+    inc     rsi
+    cmp     ecx, 0x80
+    jb      .ascii
+    cmp     ecx, 0xC0
+    jb      .l
+    cmp     ecx, 0xE3
+    jb      .one
+    cmp     ecx, 0xEA
+    jb      .two
+    cmp     ecx, 0xF0
+    jb      .one
+.two:
+    add     eax, 2
+    jmp     .l
+.ascii:
+    test    ecx, ecx
+    jz      .done
+.one:
+    inc     eax
+    jmp     .l
+.done:
     ret
